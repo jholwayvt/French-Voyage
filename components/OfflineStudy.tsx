@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { OFFLINE_LEARNING_DATA } from '../data/offlineLearnData';
 import type { OfflineLevel, OfflineCard } from '../types';
 import { speak } from '../services/speechService';
@@ -14,63 +14,81 @@ const OfflineStudy: React.FC<OfflineStudyProps> = ({ onExit }) => {
   const [selectedLevel, setSelectedLevel] = useState<OfflineLevel | null>(null);
   const [currentCardIndex, setCurrentCardIndex] = useState(0);
   const [phase, setPhase] = useState<StudyPhase>('paused');
-  const [key, setKey] = useState(0); // Used to reset animations
 
   const currentCard = useMemo(() => {
     return selectedLevel ? selectedLevel.cards[currentCardIndex] : null;
   }, [selectedLevel, currentCardIndex]);
 
-  const startCardCycle = useCallback(() => {
-    if (!currentCard) return;
-    setPhase('english');
-    const t1 = setTimeout(() => setPhase('french'), 1500);
-    const t2 = setTimeout(() => setPhase('review'), 4500);
-    const t3 = setTimeout(() => {
-        if (currentCardIndex < selectedLevel!.cards.length - 1) {
-            setCurrentCardIndex(i => i + 1);
-        } else {
-            setPhase('paused'); // End of level
-        }
-    }, 7000);
-    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
-  }, [currentCard, currentCardIndex, selectedLevel]);
-
   useEffect(() => {
-    let clearCycle: (() => void) | undefined;
-    if (phase !== 'paused') {
-        clearCycle = startCardCycle();
+    if (phase === 'paused' || !currentCard) {
+      return;
     }
-    return clearCycle;
-  }, [key, currentCardIndex, phase, startCardCycle]);
+
+    let timer: NodeJS.Timeout;
+
+    if (phase === 'english') {
+      // Transition to French phase
+      timer = setTimeout(() => {
+        setPhase('french');
+        speak(currentCard.french, 'fr-FR'); // Speak automatically on flip
+      }, 1500);
+    } else if (phase === 'french') {
+      // Transition to Review phase
+      timer = setTimeout(() => {
+        setPhase('review');
+      }, 3000); // Wait 3s on French card
+    } else if (phase === 'review') {
+      // End of cycle for this card
+      timer = setTimeout(() => {
+        if (selectedLevel && currentCardIndex < selectedLevel.cards.length - 1) {
+          setCurrentCardIndex(prev => prev + 1);
+          setPhase('english'); // Auto-advance to the next card
+        } else {
+          setPhase('paused'); // End of level
+        }
+      }, 2500); // Wait 2.5s on Review card
+    }
+
+    // Cleanup clears the timer for the current phase if interrupted
+    return () => clearTimeout(timer);
+  }, [phase, currentCard, currentCardIndex, selectedLevel]);
 
   const handleNext = () => {
-    if (!selectedLevel) return;
-    if (currentCardIndex < selectedLevel.cards.length - 1) {
-        setPhase('paused');
-        setCurrentCardIndex(i => i + 1);
+    if (selectedLevel && currentCardIndex < selectedLevel.cards.length - 1) {
+      setPhase('paused');
+      setCurrentCardIndex(i => i + 1);
     }
   };
 
   const handlePrev = () => {
     if (currentCardIndex > 0) {
-        setPhase('paused');
-        setCurrentCardIndex(i => i - 1);
+      setPhase('paused');
+      setCurrentCardIndex(i => i + 1);
     }
   };
 
   const handleReplay = () => {
     setPhase('paused');
+    // Use a timeout to ensure the state updates and cleanup runs before restarting
     setTimeout(() => {
-        setKey(k => k + 1); // remounts the animation effect
-        setPhase('english');
-    }, 100);
+      setPhase('english');
+    }, 50);
   };
   
   const handlePlay = () => {
     if (phase === 'paused') {
+      // Prime the audio engine by playing a silent utterance within the user gesture.
+      // This is a common technique to satisfy browser auto-play policies that require
+      // a user interaction to initiate audio.
+      if (window.speechSynthesis) {
+          window.speechSynthesis.cancel(); // Clear any queue
+          const primeUtterance = new SpeechSynthesisUtterance(' ');
+          primeUtterance.volume = 0;
+          window.speechSynthesis.speak(primeUtterance);
+      }
       setPhase('english');
     }
-  }
+  };
 
   if (!selectedLevel) {
     return (
@@ -83,7 +101,11 @@ const OfflineStudy: React.FC<OfflineStudyProps> = ({ onExit }) => {
             {OFFLINE_LEARNING_DATA.map(level => (
                 <button
                     key={level.level}
-                    onClick={() => setSelectedLevel(level)}
+                    onClick={() => {
+                        setSelectedLevel(level);
+                        setCurrentCardIndex(0);
+                        setPhase('paused');
+                    }}
                     className="p-4 bg-white dark:bg-slate-800 rounded-lg shadow-md hover:shadow-xl hover:bg-purple-50 dark:hover:bg-slate-700/50 transition-all text-left flex flex-col justify-between"
                 >
                     <div>
@@ -150,7 +172,7 @@ const OfflineStudy: React.FC<OfflineStudyProps> = ({ onExit }) => {
             </div>
              {phase === 'paused' && currentCardIndex < selectedLevel.cards.length -1 && (
                 <button onClick={handlePlay} className="w-full max-w-xs mt-2 bg-purple-600 text-white font-bold py-3 px-4 rounded-lg hover:bg-purple-700 transition-colors">
-                    {currentCardIndex === 0 ? "Start Studying" : "Continue"}
+                    {currentCardIndex === 0 && selectedLevel.cards.length > 1 ? "Start Studying" : "Continue"}
                 </button>
             )}
             {phase === 'paused' && currentCardIndex === selectedLevel.cards.length -1 && (
